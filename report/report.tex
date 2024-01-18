@@ -1,0 +1,95 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+\usepackage[hmargin=1.5cm, vmargin=0.5cm, headheight=2cm, includeheadfoot]{geometry}
+
+
+% % BIBLIO
+
+% \usepackage{csquotes}
+% \usepackage[backend = bibtex, style=numeric,sorting=none, url=false, doi =false, eprint=false]{biblatex}
+% %change the fontsize for bibliography
+% \renewcommand*{\bibfont}{\small}
+% \addbibresource{biblio.bib}
+
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+
+
+\usepackage{lastpage} %pour le numéro de la dernière page
+
+\usepackage{hyperref}
+\usepackage{tabularx}
+
+
+%ENTETE
+\usepackage{fancyhdr} % entêtes
+\pagestyle{fancy}
+
+\setlength{\headheight}{56.9066pt}
+\renewcommand{\headrulewidth}{0.6pt}
+\fancyhead[L]{\raisebox{-0.5\height}{\includegraphics[height=2cm,scale = 0.08]{Logo_ECN.png}}}
+\fancyhead[C]{\large \textbf{GPGPU - TP}}
+\fancyhead[R]{\scriptsize \leftmark}
+
+
+\renewcommand{\footrulewidth}{0.4pt}
+\fancyfoot[C]{Page \thepage/\pageref{LastPage}}
+
+
+\headsep = 1.5cm
+\textheight = 670pt
+\footskip = 45pt
+
+\usepackage{float}
+
+\usepackage{multicol}
+
+\begin{document}
+
+\begin{titlepage}
+   \begin{center}
+       
+       
+       \begin{center}
+      \rule{0.75\linewidth}{1pt}
+      \end{center}
+      \vspace*{1cm}
+       \textbf{\LARGE GPGPU - TP}
+
+       \vspace{0.5cm}
+        \Large Optimisation d'un réseau de neuronne sur GPU \normalsize
+        
+       %\vspace*{1cm}    
+       \begin{center}
+      \rule{0.5\linewidth}{1pt}
+      \end{center}
+  
+            
+       \vspace{1.5cm}
+
+       \textbf{Bouchez-Delotte Sacha}
+
+
+            
+       \vspace{9cm}
+     
+       \includegraphics[width=0.4\textwidth]{Logo_ECN}
+            
+       Option INFOIA\\
+       Ecole Centrale de Nantes\\
+       \today
+            
+   \end{center}
+\end{titlepage}
+
+
+\tableofcontents
+
+\section{Introduction}
+
+
+
+\end{document}
