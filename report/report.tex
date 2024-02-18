@@ -14,6 +14,20 @@
 % \renewcommand*{\bibfont}{\small}
 % \addbibresource{biblio.bib}
 
+\usepackage{listings}
+\usepackage{color}
+
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+
+\lstset{
+    basicstyle=\footnotesize,
+    captionpos=b,
+    numbers=left,
+    numberstyle=\scriptsize\color{mygray},
+    frame=single,
+}
+
+
 \usepackage{graphicx}
 \graphicspath{{figures/}}
 
@@ -88,8 +102,145 @@
 
 \tableofcontents
 
+\newpage
 \section{Introduction}
 
+\subsection{Présentation du problème}
 
+Dans le cadre de ce TP, le but est d'optimiser un réseau de neuronne sur GPU.
+Le code fourni est un code C qui simule l'optimisation d'un réseau de neuronne par descente de gradient.
+
+Quatre fichiers sont fournis :
+\begin{itemize}
+    \item \texttt{matrix.c} : le code des fonctions de manipulation de matrices
+    \item \texttt{ann.c} : le code de la structure du réseau de neuronne
+    \item \texttt{mnist.c} : les fonctions de lecture des données MNIST
+    \item \texttt{main.c} : le code principal
+\end{itemize}
+
+Le but sera alors d'identifier les parties du code qui occupent le plus de temps d'éxécution en séquentiel et de les paralléliser sur GPU.
+Pour cela, nous utiliserons un outil de profilage CPU pour identifier les parties à optimiser. Nous donnerons ensuite des pistes d'optimisation pour ces parties avant de les implémenter et de mesurer à nouveau la rapidité d'éxécution du programme.
+
+
+\subsection{Analyse du code séquentiel}
+
+Pour mesurer le profilage CPU du programme, nous avons compilé le programme avec \texttt{gcc -pg} pour obtenir un fichier \texttt{gmon.out} que nous avons ensuite analysé avec l'outil \texttt{gprof}. Voici les résultats obtenus avec trois epochs d'entraînement :
+
+\begin{lstlisting}[language=bash, caption={Sortie de \texttt{gprof}}, label={lst:gprof}, ]
+    Each sample counts as 0.01 seconds.
+      %   cumulative   self              self     total           
+     time   seconds   seconds    calls  ms/call  ms/call  name    
+     92.30     27.99    27.99   111207     0.25     0.25  matrix_dot
+      2.11     28.63     0.64    56235     0.01     0.01  matrix_minus
+      1.88     29.20     0.57    44988     0.01     0.01  matrix_scalar
+      1.55     29.68     0.47    13743     0.03     0.03  populate_minibatch
+      1.24     30.05     0.38    33741     0.01     0.01  matrix_transpose
+      0.33     30.15     0.10 23191680     0.00     0.00  sigmoid
+      0.20     30.21     0.06    49980     0.00     0.00  matrix_function
+      0.13     30.25     0.04    27486     0.00     0.00  matrix_sum
+      0.13     30.29     0.04    22494     0.00     0.00  hadamard_product
+      0.10     30.32     0.03  7198080     0.00     0.00  dsigmoid
+      0.03     30.33     0.01    23820     0.00     0.00  normalRand
+      0.03     30.34     0.01    11247     0.00     1.41  backward
+      0.00     30.34     0.00   217438     0.00     0.00  alloc_matrix
+      0.00     30.34     0.00   217423     0.00     0.00  destroy_matrix
+      0.00     30.34     0.00    13743     0.00     1.02  forward
+      0.00     30.34     0.00        7     0.00     0.00  zero_to_n
+      0.00     30.34     0.00        4     0.00   656.24  accuracy
+      0.00     30.34     0.00        4     0.00     0.00  make_uint32
+      0.00     30.34     0.00        3     0.00     3.34  create_layer
+      0.00     30.34     0.00        3     0.00     0.00  shuffle
+      0.00     30.34     0.00        2     0.00     5.00  init_weight
+      0.00     30.34     0.00        2     0.00     0.00  read_images
+      0.00     30.34     0.00        2     0.00     0.00  read_labels
+      0.00     30.34     0.00        1     0.00    10.01  create_ann
+\end{lstlisting}
+
+Nous pouvons remarquer que la fonction \texttt{matrix\_dot} occupe 92.3\% du temps d'éxécution du programme. C'est donc cette fonction que nous allons chercher à paralléliser sur GPU.
+
+\section{Approches d'optimisation du code séquentiel}
+\subsection{Utilisation de la mémoire unifiée}
+
+Nous avons choisi d'utiliser la mémoire unifiée pour gérer la mémoire entre le CPU et le GPU. Cela nous permettra de ne pas avoir à copier les données entre les deux mémoires et de simplifier la gestion de cette dernière. Le TP étant réalisé sur une machine Linux 64 bits avec un GPU NVIDIA Geforce GTX 1650 Ti, il paraît cohérent d'utiliser ce type de mémoire.
+
+\subsection{Parallélisation de la fonction \texttt{matrix\_dot}}
+
+L'analyse du code séquentiel a montré que la fonction \texttt{matrix\_dot} occupe 92.3\% du temps d'éxécution du programme. Nous proposons donc une approche de parallélisation de cette fonction sur GPU en utilisant des tuiles de taille $16 \times 16$ pour les calculs. Le code de la fonction parallélisée est donné dans le listing \ref{lst:matrix_dot_gpu}.
+
+\begin{lstlisting}[language=c, caption={Parallélisation de \texttt{matrix\_dot} sur GPU}, label={lst:matrix_dot_gpu}, basicstyle=\scriptsize,]
+__global__
+void matrix_dot(matrix_t *m1, matrix_t *m2, matrix_t *res) {
+    __shared__ float M[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float N[TILE_WIDTH][TILE_WIDTH];
+    int block_x = blockIdx.x, block_y = blockIdx.y, thread_x = threadIdx.x, thread_y = threadIdx.y,
+    row = block_y * TILE_WIDTH + thread_y, col = block_x * TILE_WIDTH + thread_x;
+    float P = 0;
+
+    for (int m = 0; m < (m1->columns - 1) / TILE_WIDTH + 1; ++m) {
+        if (row < m1->rows && m * TILE_WIDTH + thread_x < m1->columns){
+            M[thread_y][thread_x] = m1->m[row * m1->columns + m * TILE_WIDTH + thread_x];
+        }
+        else{
+            M[thread_y][thread_x] = 0;
+        }
+        if (col < m2->columns && m * TILE_WIDTH + thread_y < m2->rows){
+            N[thread_y][thread_x] = m2->m[(m * TILE_WIDTH + thread_y) * m2->columns + col];
+        }
+        else{
+            N[thread_y][thread_x] = 0;
+        }
+        __syncthreads();
+
+        for (int i = 0; i < TILE_WIDTH; ++i){
+            P += M[thread_y][i] * N[i][thread_x];
+        }
+        __syncthreads();
+    }
+    if (row < m1->rows && col < m2->columns){
+        res->m[row * m2->columns + col] = P;
+    }
+}
+\end{lstlisting}
+
+\subsection{Approches supplémentaires}
+
+Nous avons également envisagé d'optimiser les fonctions \texttt{matrix\_minus}, \texttt{matrix\_scalar} et \texttt{matrix\_transpose} en les parallélisant sur GPU. En effet, ces fonctions sont celles qui ont été identifiées comme les plus lentes par \texttt{gprof} après \texttt{matrix\_dot}. Il a aussi été envisagé de réécrire les fonctions \texttt{backward} et \texttt{forward} pour optimiser les nombres d'appel au fonctions CUDA. Cependant, le temps imparti pour ce TP ne nous a pas permis de réaliser ces optimisations.
+
+\section{Expériences et résultats}
+
+\subsection{Debugging}
+
+Afin de vérifier le bon fonctionnement des fonctions CUDA, nous avons définit une macro \texttt{CHECK\_CUDA\_ERROR} dans un script \texttt{error.c} qui nous permet de vérifier si une erreur est survenue lors de l'éxécution d'une fonction CUDA. Cette macro est définie comme suit :
+
+\begin{lstlisting}[language=c, caption={Macro \texttt{CHECK\_CUDA\_ERROR}}, label={lst:check_cuda_error}, ]
+void check(cudaError_t err, const char* const func, const char* const file,
+    const int line)
+{
+    if (err != cudaSuccess)
+        {
+        //
+        printf("CUDA Runtime Error at: %s:%d\n", file, line);
+        // 
+        printf("%s %s\n", cudaGetErrorString(err), func);
+        }
+}
+void CHECK_CUDA_ERROR(cudaError_t val)
+{
+    check(val, "error", __FILE__, __LINE__);
+}
+\end{lstlisting}
+
+Cette macro nous a permis de nous rendre compte qu'une version de CUDA incompatible avec le driver NVIDIA était installée sur la machine. Après avoir rétrogradé CUDA Toolkit vers la version 11.4, nous avons également constaté que la version de \texttt{gcc} installée sur la machine était trop récente pour être compatible avec cette version de CUDA. Nous avons donc dû installer \texttt{gcc} et \texttt{g++} version 9.3.0 dans un environnement virtuel pour que le code puisse être compilé.
+
+À ce stade, nous avons pu compiler le code et l'éxécuter sans erreur. \texttt{cuda-memcheck} nous a permis de vérifier que le code ne contenait pas de fuites mémoires.
+
+\subsection{Mesure de la rapidité d'éxécution}
+
+Nous avons voulu utiliser \texttt{nvprof} pour mesurer la rapidité d'éxécution du programme. Cependant, nous avons rencontré des problèmes de compatibilité entre la version de \texttt{gcc} installée sur la machine et la version de \texttt{nvprof} installée avec CUDA Toolkit. Nous avons donc décidé de mesurer la rapidité d'éxécution du programme entier en utilisant la fonction \texttt{clock} de la librairie \texttt{time.h}.
+Le code fourni dans le fichier \texttt{main.c} s'éxécute en 31.37 secondes de manière séquentialisée sur le CPU, et en seulement 6.44 secondes avec la fonction \texttt{matrix\_dot} parallélisée sur le GPU. Le gain de rapidité est notable mais nous n'avons pas pu mesurer l'impact des autres fonctions parallélisées car le profilage ne fonctionnait pas.
+
+\section{Conclusion}
+
+Pour conclure, sans Jetson Nano, beaucoup de temps a été passé à faire fonctionner les outils sur une machine personnelle avec le temps limité pour ce TP (n'ayant pas assisté au séances à l'école). Cela a été très formateur pour comprendre les problèmes de compatibilité entre les différentes versions de logiciels et de matériel, mais nous aurions aimé passer plus de temps sur l'optimisation et la parallélisation du code. Nous avons tout de même pu paralléliser la fonction \texttt{matrix\_dot} sur GPU et mesurer un gain de rapidité significatif.
 
 \end{document}
